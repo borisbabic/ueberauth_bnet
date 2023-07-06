@@ -26,14 +26,8 @@ defmodule Ueberauth.Strategy.Bnet do
   @doc false
   def handle_callback!(%Plug.Conn{params: %{"code" => code}} = conn) do
     # opts = [redirect_uri: callback_url(conn)]
-    region = get_region(code)
 
-    client =
-      Ueberauth.Strategy.Bnet.OAuth.get_token!(
-        [code: code, redirect_uri: callback_url(conn)],
-        [],
-        region: region
-      )
+    client = get_token(code, conn)
 
     if client.token.access_token == nil do
       err = client.token.other_params["error"]
@@ -46,10 +40,42 @@ defmodule Ueberauth.Strategy.Bnet do
     end
   end
 
-  @doc false
   def handle_callback!(conn) do
     set_errors!(conn, [error("missing_code", "No code received")])
   end
+
+  def get_token(code, conn) do
+    regions = get_region(code) |> add_fallback_regions() |> IO.inspect(label: :regions)
+    do_get_token(code, conn, regions)
+  end
+
+  defp do_get_token(code, conn, regions, first_result \\ nil)
+  defp do_get_token(_code, _conn, [], first_result), do: raise(first_result)
+
+  defp do_get_token(code, conn, [region | fallbacks], first_result) do
+    IO.inspect(region, label: :region)
+
+    try do
+      # TODO: check why get_token() behaves differently, is that expected?
+      Ueberauth.Strategy.Bnet.OAuth.get_token!(
+        [code: code, redirect_uri: callback_url(conn)],
+        [],
+        region: region
+      )
+    rescue
+      e -> do_get_token(code, conn, fallbacks, first_result || e)
+    end
+  end
+
+  defp add_fallback_regions(region) do
+    [region | fallback_regions(region)]
+  end
+
+  defp fallback_regions("apac"), do: ["kr", "us", "eu"]
+  defp fallback_regions("us"), do: ["eu", "apac", "kr"]
+  defp fallback_regions("eu"), do: ["us", "apac", "kr"]
+  defp fallback_regions("kr"), do: ["apac", "us", "eu"]
+  defp fallback_regions(_), do: []
 
   @doc false
   def handle_cleanup!(conn) do
